@@ -17,7 +17,7 @@ class CreateTaskGroupInput(OpenIMISMutation.Input):
         ANY = TaskGroup.TaskGroupCompletionPolicy.ANY
         N = TaskGroup.TaskGroupCompletionPolicy.N
 
-    code = graphene.String(required=True, max_length=255)
+    code = graphene.String(required=False, max_length=255)
     completion_policy = graphene.Field(TaskGroupCompletionPolicyEnum, required=True)
     user_ids = graphene.List(graphene.UUID)
     task_sources = graphene.List(graphene.String)
