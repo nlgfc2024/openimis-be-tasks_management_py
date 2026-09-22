@@ -3,14 +3,13 @@ import datetime
 import decimal
 import logging
 import uuid
-import random
-from datetime import date
 from abc import abstractmethod, ABC
 from typing import Dict, Type
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
 from core.datetimes.ad_datetime import AdDate, AdDatetime
+from core.code_generation import generate_unique_year_code
 from core.forms import User
 from core.services import BaseService
 from core.signals import register_service_signal
@@ -21,21 +20,6 @@ from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
 
 logger = logging.getLogger(__name__)
-
-CODE_RANDOM_DIGITS = 5
-CODE_GENERATION_ATTEMPTS = 20
-
-
-def generate_unique_task_group_code(model, current_date=None):
-    """Build a `<year><random 5-digit suffix>` code, retrying on collision."""
-    year = (current_date or date.today()).year
-    for _ in range(CODE_GENERATION_ATTEMPTS):
-        suffix = random.randint(0, 10 ** CODE_RANDOM_DIGITS - 1)
-        code = f"{year}{suffix:0{CODE_RANDOM_DIGITS}d}"
-        if not model.objects.filter(code=code, is_deleted=False).exists():
-            return code
-    raise ValueError("Unable to generate a unique task group code, please retry.")
-
 
 class TaskService(BaseService):
     OBJECT_TYPE = Task
@@ -130,7 +114,12 @@ class TaskGroupService(BaseService):
                 user_ids = obj_data.pop('user_ids')
                 obj_data = self._adjust_update_payload(obj_data)
                 if not obj_data.get('code'):
-                    obj_data = {**obj_data, 'code': generate_unique_task_group_code(self.OBJECT_TYPE)}
+                    obj_data = {
+                        **obj_data,
+                        'code': generate_unique_year_code(
+                            self.OBJECT_TYPE, {"is_deleted": False}
+                        ),
+                    }
                 self.validation_class.validate_create(self.user, **obj_data)
                 task_sources = obj_data.pop('task_sources')
                 obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)}}
