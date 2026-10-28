@@ -75,7 +75,15 @@ class TaskGQLType(DjangoObjectType):
         return serialized_data
 
     def resolve_entity_string(self, info):
-        return self.entity.__str__()
+        # A task can outlive an optional module model or a development model
+        # rename.  GenericForeignKey raises AttributeError when its saved
+        # ContentType no longer resolves to a registered model; one stale task
+        # must not prevent the whole task list from loading.
+        try:
+            entity = self.entity
+        except (AttributeError, LookupError):
+            return self.entity_id or ""
+        return str(entity) if entity is not None else (self.entity_id or "")
 
     @classmethod
     def get_queryset(cls, queryset, info):
