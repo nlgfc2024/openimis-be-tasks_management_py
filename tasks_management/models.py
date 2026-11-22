@@ -35,6 +35,11 @@ class Task(HistoryModel):
     entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
     entity_id = models.CharField(max_length=255,  blank=True, null=True)
     entity = GenericForeignKey('entity_type', 'entity_id')
+    # Kept as a generic identifier so this module does not depend on Social
+    # Protection being installed.  ``benefit_plan_is_shared`` distinguishes a
+    # deliberately shared task from one whose programme ownership is unknown.
+    benefit_plan_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    benefit_plan_is_shared = models.BooleanField(default=False)
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.RECEIVED)
     executor_action_event = models.CharField(max_length=255, blank=True, null=True)
     business_status = models.JSONField( blank=True,default=dict)
