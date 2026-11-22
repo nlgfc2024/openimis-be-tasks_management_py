@@ -1,7 +1,7 @@
 import graphene as graphene
 from django.db import transaction
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 
 from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationMixin, BaseMutation, \
     BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
@@ -9,6 +9,7 @@ from core.schema import OpenIMISMutation
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, Task, TaskMutation
 from tasks_management.services import TaskGroupService, TaskService
+from tasks_management.benefit_plan_access import require_task_operation_access
 
 
 class CreateTaskGroupInput(OpenIMISMutation.Input):
@@ -142,6 +143,10 @@ class UpdateTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
         if not user.has_perms(
                 TasksManagementConfig.gql_task_update_perms):
             raise ValidationError("mutation.authentication_required")
+        task = Task.objects.filter(id=data.get('id'), is_deleted=False).first()
+        if task is None:
+            raise PermissionDenied("unauthorized")
+        require_task_operation_access(user, task)
 
     @classmethod
     def _mutate(cls, user, **data):
@@ -169,6 +174,16 @@ class ResolveTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _mutation_class = "ResolveTaskMutation"
     _mutation_module = "tasks_management"
     _model = Task
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(TasksManagementConfig.gql_task_update_perms):
+            raise ValidationError("mutation.authentication_required")
+        task = Task.objects.filter(id=data.get('id'), is_deleted=False).first()
+        if task is None:
+            raise PermissionDenied("unauthorized")
+        require_task_operation_access(user, task)
 
     @classmethod
     def _mutate(cls, user, **data):
