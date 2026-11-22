@@ -7,7 +7,7 @@ from tasks_management.apps import TasksManagementConfig
 from tasks_management.tests.data import TaskDataMixin
 from tasks_management.services import TaskService, TaskGroupService
 from tasks_management.models import Task
-from core.test_helpers import LogInHelper
+from core.test_helpers import LogInHelper, create_test_language
 from django.db import connection
 
 
@@ -22,6 +22,7 @@ class TaskServiceTestCase(TestCase, TaskDataMixin):
     @classmethod
     def setUpClass(cls):
         super(TaskServiceTestCase, cls).setUpClass()
+        create_test_language()
         cls.user = LogInHelper().get_or_create_user_api()
         cls.task_executor = LogInHelper().get_or_create_user_api(
                 username='TaskExecutor')
