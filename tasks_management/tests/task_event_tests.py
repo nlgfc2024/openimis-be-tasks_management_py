@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 from django.test import TestCase
 
-from core.test_helpers import create_test_interactive_user
+from core.test_helpers import create_test_interactive_user, create_test_language
 from tasks_management.tests.data import TaskDataMixin
 from tasks_management.services import TaskService
 from tasks_management.models import Task
@@ -24,6 +24,7 @@ class TaskEventTestCase(TestCase, TaskDataMixin):
     @classmethod
     def setUpClass(cls):
         super(TaskEventTestCase, cls).setUpClass()
+        create_test_language()
         cls.user = create_test_interactive_user(username="test_admin")
         cls.service = TaskService(cls.user)
         cls.init_data()
