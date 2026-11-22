@@ -6,6 +6,7 @@ import uuid
 from abc import abstractmethod, ABC
 from typing import Dict, Type
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
 from core.datetimes.ad_datetime import AdDate, AdDatetime
@@ -17,6 +18,11 @@ from core.services.utils import check_authentication, output_exception, output_r
 from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
+from tasks_management.benefit_plan_access import (
+    require_task_operation_access,
+    require_task_plan_access,
+    resolve_task_ownership,
+)
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
 
 logger = logging.getLogger(__name__)
@@ -24,21 +30,69 @@ logger = logging.getLogger(__name__)
 class TaskService(BaseService):
     OBJECT_TYPE = Task
 
-    def __init__(self, user, validation_class=TaskValidation):
+    def __init__(
+        self,
+        user,
+        validation_class=TaskValidation,
+        *,
+        trusted_internal=False,
+    ):
         super().__init__(user, validation_class)
+        self.trusted_internal = trusted_internal
 
     @transaction.atomic
     @register_service_signal('task_service.create')
     def create(self, obj_data):
-        source = obj_data.get('source')
-        task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
-        if task_group_query:
-            obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
-        return super().create(obj_data)
+        try:
+            obj_data = dict(obj_data)
+            obj_data.pop('benefit_plan_is_shared', None)
+            benefit_plan_id, is_shared = resolve_task_ownership(obj_data)
+            obj_data['benefit_plan_id'] = benefit_plan_id
+            obj_data['benefit_plan_is_shared'] = is_shared
+            ownership_probe = Task(
+                benefit_plan_id=benefit_plan_id,
+                benefit_plan_is_shared=is_shared,
+            )
+            require_task_plan_access(self.user, ownership_probe)
+            source = obj_data.get('source')
+            task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
+            if task_group_query:
+                obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
+            return super().create(obj_data)
+        except Exception as exc:
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__, method="create", exception=exc
+            )
 
     @register_service_signal('task_service.update')
     def update(self, obj_data):
-        return super().update(obj_data)
+        obj_data = dict(obj_data)
+        task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
+        if task is None:
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__,
+                method="update",
+                exception=Task.DoesNotExist("Task does not exist."),
+            )
+        try:
+            require_task_operation_access(
+                self.user,
+                task,
+                trusted_internal=self.trusted_internal,
+            )
+            benefit_plan_id, is_shared = resolve_task_ownership(obj_data, current=task)
+            if (
+                benefit_plan_id != task.benefit_plan_id
+                or is_shared != task.benefit_plan_is_shared
+            ):
+                raise PermissionDenied("Task ownership cannot be changed.")
+            obj_data.pop('benefit_plan_id', None)
+            obj_data.pop('benefit_plan_is_shared', None)
+            return super().update(obj_data)
+        except Exception as exc:
+            return output_exception(
+                model_name=self.OBJECT_TYPE.__name__, method="update", exception=exc
+            )
 
     @register_service_signal('task_service.delete')
     def delete(self, obj_data):
@@ -49,6 +103,11 @@ class TaskService(BaseService):
         try:
             with transaction.atomic():
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                require_task_operation_access(
+                    self.user,
+                    obj,
+                    trusted_internal=self.trusted_internal,
+                )
                 obj.status = Task.Status.FAILED if obj_data.get('failed', False) else Task.Status.COMPLETED
                 obj.save(username=self.user.login_name)
                 return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
@@ -58,8 +117,13 @@ class TaskService(BaseService):
     @register_service_signal('task_service.resolve_task')
     def resolve_task(self, obj_data):
         try:
-            self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+            require_task_operation_access(
+                self.user,
+                obj,
+                trusted_internal=self.trusted_internal,
+            )
+            self.validation_class.validate_update(self.user, **obj_data)
             incoming_status = obj_data.get('business_status')
             additional_data = obj_data.get('additional_data')
             self._update_task_business_status(obj, incoming_status, additional_data)
