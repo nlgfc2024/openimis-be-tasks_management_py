@@ -10,6 +10,10 @@ from core import ExtendedConnection, prefix_filterset
 from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
+from tasks_management.benefit_plan_access import (
+    filter_tasks_by_benefit_plan,
+    require_task_plan_access,
+)
 
 DICT_STRING = "{}"
 
@@ -47,6 +51,7 @@ class TaskGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_business_data(self, info):
+        require_task_plan_access(info.context.user, self)
         data = self.data
         serializer_path = self.business_data_serializer
         serialized_data = copy.deepcopy(data)
@@ -75,17 +80,22 @@ class TaskGQLType(DjangoObjectType):
         return serialized_data
 
     def resolve_entity_string(self, info):
+        require_task_plan_access(info.context.user, self)
         return self.entity.__str__()
 
     @classmethod
     def get_queryset(cls, queryset, info):
         user = info.context.user
         if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
+            queryset = queryset.filter(is_deleted=False)
+        else:
+            queryset = queryset.filter(
+                Q(task_group__taskexecutor__user=user)
+                & Q(task_group__taskexecutor__is_deleted=False)
+                & ~Q(status=Task.Status.RECEIVED),
+                is_deleted=False
+            )
+        return filter_tasks_by_benefit_plan(queryset, user).distinct()
 
 
 class TaskHistoryGQLType(DjangoObjectType):
@@ -114,6 +124,7 @@ class TaskHistoryGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_business_data(self, info):
+        require_task_plan_access(info.context.user, self)
         data = self.data
         serializer_path = self.business_data_serializer
         serialized_data = copy.deepcopy(data)
@@ -141,15 +152,29 @@ class TaskHistoryGQLType(DjangoObjectType):
 
         return serialized_data
 
+    def resolve_entity_string(self, info):
+        require_task_plan_access(info.context.user, self)
+        entity_type = self.entity_type
+        if entity_type is None or not self.entity_id:
+            return None
+        try:
+            return str(entity_type.get_object_for_this_type(pk=self.entity_id))
+        except Exception:
+            return None
+
     @classmethod
     def get_queryset(cls, queryset, info):
         user = info.context.user
         if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
+            queryset = queryset.filter(is_deleted=False)
+        else:
+            queryset = queryset.filter(
+                Q(task_group__taskexecutor__user=user)
+                & Q(task_group__taskexecutor__is_deleted=False)
+                & ~Q(status=Task.Status.RECEIVED),
+                is_deleted=False
+            )
+        return filter_tasks_by_benefit_plan(queryset, user).distinct()
 
 
 class TaskGroupGQLType(DjangoObjectType):

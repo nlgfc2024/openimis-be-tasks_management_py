@@ -75,7 +75,7 @@ class Query(graphene.ObjectType):
             filters.append(Q(entity_id__in=entityIds))
 
         # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.objects.filter(*filters)
+        query = TaskGQLType.get_queryset(Task.objects.filter(*filters), info)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
@@ -101,7 +101,7 @@ class Query(graphene.ObjectType):
             filters.append(Q(entity_id__in=entityIds))
 
         # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.history.filter(*filters)
+        query = TaskHistoryGQLType.get_queryset(Task.history.filter(*filters), info)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
