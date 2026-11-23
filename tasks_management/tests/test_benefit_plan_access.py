@@ -20,6 +20,7 @@ from social_protection.apps import SocialProtectionConfig
 from social_protection.models import BenefitPlan, UserBenefitPlanAccess
 
 from tasks_management.benefit_plan_access import (
+    benefit_plan_access_control_enabled,
     filter_tasks_by_benefit_plan,
     resolve_task_ownership,
 )
@@ -339,6 +340,14 @@ class TaskBenefitPlanAccessTest(TestCase):
             return_value=False,
         ):
             self.assertIs(filter_tasks_by_benefit_plan(queryset, self.none), queryset)
+
+    def test_feature_state_delegates_to_shared_authorization_service(self):
+        with patch(
+            "social_protection.benefit_plan_access.benefit_plan_access_control_enabled",
+            return_value=False,
+        ) as shared_enabled:
+            self.assertFalse(benefit_plan_access_control_enabled())
+        shared_enabled.assert_called_once_with()
 
     def test_feature_off_create_and_update_skip_ownership_handling(self):
         SocialProtectionConfig.enable_benefit_plan_access_control = False
