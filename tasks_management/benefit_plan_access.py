@@ -15,20 +15,19 @@ def _user(user_or_info):
 
 
 def benefit_plan_access_control_enabled():
-    if not apps.is_installed("social_protection"):
+    helpers = _shared_access_helpers()
+    if helpers is None:
         return False
-    try:
-        from social_protection.apps import SocialProtectionConfig
-    except ImportError:
-        return False
-    return bool(
-        getattr(SocialProtectionConfig, "enable_benefit_plan_access_control", False)
-    )
+    shared_enabled, _, _ = helpers
+    return shared_enabled()
 
 
 def _shared_access_helpers():
+    if not apps.is_installed("social_protection"):
+        return None
     try:
         from social_protection.benefit_plan_access import (
+            benefit_plan_access_control_enabled,
             get_accessible_benefit_plan_ids,
             require_benefit_plan_access,
         )
@@ -37,7 +36,11 @@ def _shared_access_helpers():
             "Benefit Plan task access is enabled, but the shared Social "
             "Protection authorization service is unavailable."
         ) from exc
-    return get_accessible_benefit_plan_ids, require_benefit_plan_access
+    return (
+        benefit_plan_access_control_enabled,
+        get_accessible_benefit_plan_ids,
+        require_benefit_plan_access,
+    )
 
 
 def _normalise_plan_id(value):
@@ -81,12 +84,12 @@ def require_task_plan_access(user, task):
         return task
     user = _user(user)
     if task.benefit_plan_id:
-        _, require_benefit_plan_access = _shared_access_helpers()
+        _, _, require_benefit_plan_access = _shared_access_helpers()
         require_benefit_plan_access(user, task.benefit_plan_id)
         return task
     if task.benefit_plan_is_shared:
         return task
-    get_accessible_benefit_plan_ids, _ = _shared_access_helpers()
+    _, get_accessible_benefit_plan_ids, _ = _shared_access_helpers()
     if get_accessible_benefit_plan_ids(user) is None:
         return task
     raise PermissionDenied("Task Benefit Plan ownership is unresolved.")
@@ -95,7 +98,7 @@ def require_task_plan_access(user, task):
 def filter_tasks_by_benefit_plan(queryset, user):
     if not benefit_plan_access_control_enabled():
         return queryset
-    get_accessible_benefit_plan_ids, _ = _shared_access_helpers()
+    _, get_accessible_benefit_plan_ids, _ = _shared_access_helpers()
     accessible_ids = get_accessible_benefit_plan_ids(_user(user))
     if accessible_ids is None:
         return queryset
