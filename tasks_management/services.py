@@ -19,6 +19,7 @@ from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.benefit_plan_access import (
+    benefit_plan_access_control_enabled,
     require_task_operation_access,
     require_task_plan_access,
     resolve_task_ownership,
@@ -26,6 +27,18 @@ from tasks_management.benefit_plan_access import (
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
 
 logger = logging.getLogger(__name__)
+
+
+def _explicit_task_ownership(service, entity, obj_data):
+    resolver = getattr(service, "_task_benefit_plan_id", None)
+    if resolver is None:
+        return {}
+    benefit_plan_id = resolver(entity, obj_data)
+    return (
+        {"benefit_plan_id": str(benefit_plan_id)}
+        if benefit_plan_id is not None
+        else {}
+    )
 
 class TaskService(BaseService):
     OBJECT_TYPE = Task
@@ -43,10 +56,18 @@ class TaskService(BaseService):
     @transaction.atomic
     @register_service_signal('task_service.create')
     def create(self, obj_data):
+        if not benefit_plan_access_control_enabled():
+            source = obj_data.get('source')
+            task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
+            if task_group_query:
+                obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
+            return super().create(obj_data)
         try:
             obj_data = dict(obj_data)
-            obj_data.pop('benefit_plan_is_shared', None)
-            benefit_plan_id, is_shared = resolve_task_ownership(obj_data)
+            benefit_plan_id, is_shared = resolve_task_ownership(
+                obj_data,
+                allow_shared=self.trusted_internal,
+            )
             obj_data['benefit_plan_id'] = benefit_plan_id
             obj_data['benefit_plan_is_shared'] = is_shared
             ownership_probe = Task(
@@ -66,6 +87,8 @@ class TaskService(BaseService):
 
     @register_service_signal('task_service.update')
     def update(self, obj_data):
+        if not benefit_plan_access_control_enabled():
+            return super().update(obj_data)
         obj_data = dict(obj_data)
         task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
         if task is None:
@@ -277,6 +300,7 @@ class CreateCheckerLogicServiceMixin(ABC):
                     'executor_action_event': self._create_executor_event,
                     'business_event': self._create_business_event,
                     'data': self._adjust_create_task_data(None, copy.deepcopy(obj_data)),
+                    **_explicit_task_ownership(self, None, obj_data),
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -329,6 +353,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
                     'executor_action_event': self._update_executor_event,
                     'business_event': self._update_business_event,
                     'data': self._adjust_update_task_data(obj, copy.deepcopy(obj_data)),
+                    **_explicit_task_ownership(self, obj, obj_data),
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -389,6 +414,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
                     'executor_action_event': self._delete_executor_event,
                     'business_event': self._delete_business_event,
                     'data': self._adjust_delete_task_data(None, copy.deepcopy(obj_data)),
+                    **_explicit_task_ownership(self, obj, obj_data),
                 }
                 return task_service.create(task_data)
         except Exception as exc:

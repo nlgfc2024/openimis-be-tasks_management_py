@@ -1,3 +1,6 @@
+import logging
+
+from django.apps import apps as django_apps
 from django.db import migrations, models
 
 
@@ -12,15 +15,43 @@ SHARED_SOURCES = {
     "CreateGroupAndMoveIndividualService",
 }
 _AVAILABLE_TABLES = None
+logger = logging.getLogger(__name__)
+
+OPTIONAL_DEPENDENCIES = (
+    (
+        "social_protection",
+        "0008_benefitplandatauploadrecords_historicalbenefitplandatauploadrecords",
+    ),
+    ("contribution_plan", "0012_benefit_plan_generic_fk"),
+    ("payroll", "0011_auto_20240202_1140"),
+)
+
+
+def _configured_dependencies(app_registry):
+    return [
+        dependency
+        for dependency in OPTIONAL_DEPENDENCIES
+        if app_registry.is_installed(dependency[0])
+    ]
 
 
 def _model(apps, app_label, model_name):
     try:
-        model = apps.get_model(app_label, model_name)
+        apps.get_app_config(app_label)
     except LookupError:
         return None
+    try:
+        model = apps.get_model(app_label, model_name)
+    except LookupError as exc:
+        raise LookupError(
+            f"Migration 0011 requires {app_label}.{model_name} when "
+            f"the {app_label} app is installed."
+        ) from exc
     if _AVAILABLE_TABLES is not None and model._meta.db_table not in _AVAILABLE_TABLES:
-        return None
+        raise RuntimeError(
+            f"Migration 0011 requires table {model._meta.db_table} for "
+            f"{app_label}.{model_name}. Check the migration dependencies."
+        )
     return model
 
 
@@ -163,11 +194,13 @@ def backfill_task_ownership(apps, schema_editor):
     Task = apps.get_model("tasks_management", "Task")
     HistoricalTask = apps.get_model("tasks_management", "HistoricalTask")
     for model in (Task, HistoricalTask):
+        unresolved = 0
         for task in model.objects.select_related("entity_type").iterator():
             plan_id, is_shared = _entity_ownership(apps, task)
             payload_ids = {
                 value
                 for value in (
+                    task.benefit_plan_id,
                     _payload_plan_id(task.data),
                     _payload_plan_id(task.json_ext),
                 )
@@ -184,11 +217,22 @@ def backfill_task_ownership(apps, schema_editor):
             elif len(payload_ids) > 1:
                 plan_id = None
                 is_shared = False
+            elif task.benefit_plan_is_shared:
+                is_shared = True
             elif task.source in SHARED_SOURCES:
                 is_shared = True
+            if not plan_id and not is_shared:
+                unresolved += 1
             model.objects.filter(pk=task.pk).update(
                 benefit_plan_id=plan_id,
                 benefit_plan_is_shared=is_shared,
+            )
+        if unresolved:
+            logger.warning(
+                "Migration 0011 left %s %s rows with unresolved Benefit Plan "
+                "ownership; they remain restricted.",
+                unresolved,
+                model._meta.label,
             )
 
 
@@ -196,6 +240,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("tasks_management", "0010_add_search_all_perms_admin"),
+        *_configured_dependencies(django_apps),
     ]
 
     operations = [
