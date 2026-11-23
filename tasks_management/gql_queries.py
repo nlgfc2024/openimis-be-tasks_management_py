@@ -11,6 +11,7 @@ from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.benefit_plan_access import (
+    benefit_plan_access_control_enabled,
     filter_tasks_by_benefit_plan,
     require_task_plan_access,
 )
@@ -86,6 +87,14 @@ class TaskGQLType(DjangoObjectType):
     @classmethod
     def get_queryset(cls, queryset, info):
         user = info.context.user
+        if not benefit_plan_access_control_enabled():
+            if user.is_imis_admin or is_task_triage(user):
+                return queryset.filter(is_deleted=False)
+            return queryset.filter(
+                Q(task_group__taskexecutor__user=user)
+                & ~Q(status=Task.Status.RECEIVED),
+                is_deleted=False,
+            )
         if user.is_imis_admin or is_task_triage(user):
             queryset = queryset.filter(is_deleted=False)
         else:
@@ -165,6 +174,14 @@ class TaskHistoryGQLType(DjangoObjectType):
     @classmethod
     def get_queryset(cls, queryset, info):
         user = info.context.user
+        if not benefit_plan_access_control_enabled():
+            if user.is_imis_admin or is_task_triage(user):
+                return queryset.filter(is_deleted=False)
+            return queryset.filter(
+                Q(task_group__taskexecutor__user=user)
+                & ~Q(status=Task.Status.RECEIVED),
+                is_deleted=False,
+            )
         if user.is_imis_admin or is_task_triage(user):
             queryset = queryset.filter(is_deleted=False)
         else:
