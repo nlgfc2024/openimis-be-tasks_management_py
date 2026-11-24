@@ -30,15 +30,23 @@ logger = logging.getLogger(__name__)
 
 
 def _explicit_task_ownership(service, entity, obj_data):
+    ownership = {}
     resolver = getattr(service, "_task_benefit_plan_id", None)
-    if resolver is None:
-        return {}
-    benefit_plan_id = resolver(entity, obj_data)
-    return (
-        {"benefit_plan_id": str(benefit_plan_id)}
-        if benefit_plan_id is not None
-        else {}
+    if resolver is not None:
+        benefit_plan_id = resolver(entity, obj_data)
+        if benefit_plan_id is not None:
+            ownership["benefit_plan_id"] = str(benefit_plan_id)
+    if getattr(service, "_task_is_shared", False) is True:
+        ownership["benefit_plan_is_shared"] = True
+    return ownership
+
+
+def _checker_task_service(service, ownership):
+    return TaskService(
+        service.user,
+        trusted_internal=ownership.get("benefit_plan_is_shared") is True,
     )
+
 
 class TaskService(BaseService):
     OBJECT_TYPE = Task
@@ -289,18 +297,21 @@ class CreateCheckerLogicServiceMixin(ABC):
     def OBJECT_TYPE(self):
         pass
 
+    _task_is_shared = False
+
     def create_create_task(self, obj_data):
         try:
             with transaction.atomic():
                 self.validation_class.validate_create(self.user, **obj_data)
-                task_service = TaskService(self.user)
+                ownership = _explicit_task_ownership(self, None, obj_data)
+                task_service = _checker_task_service(self, ownership)
                 task_data = {
                     'source': self._create_source,
                     'business_data_serializer': self._get_business_data_serializer(),
                     'executor_action_event': self._create_executor_event,
                     'business_event': self._create_business_event,
                     'data': self._adjust_create_task_data(None, copy.deepcopy(obj_data)),
-                    **_explicit_task_ownership(self, None, obj_data),
+                    **ownership,
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -339,12 +350,15 @@ class UpdateCheckerLogicServiceMixin(ABC):
     def OBJECT_TYPE(self):
         pass
 
+    _task_is_shared = False
+
     def create_update_task(self, obj_data):
         try:
             with transaction.atomic():
                 self.validation_class.validate_update(self.user, **obj_data)
-                task_service = TaskService(self.user)
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                ownership = _explicit_task_ownership(self, obj, obj_data)
+                task_service = _checker_task_service(self, ownership)
                 task_data = {
                     'source': self._update_source,
                     'business_data_serializer': self._get_business_data_serializer(),
@@ -353,7 +367,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
                     'executor_action_event': self._update_executor_event,
                     'business_event': self._update_business_event,
                     'data': self._adjust_update_task_data(obj, copy.deepcopy(obj_data)),
-                    **_explicit_task_ownership(self, obj, obj_data),
+                    **ownership,
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -400,12 +414,15 @@ class DeleteCheckerLogicServiceMixin(ABC):
     def OBJECT_TYPE(self):
         pass
 
+    _task_is_shared = False
+
     def create_delete_task(self, obj_data):
         try:
             with transaction.atomic():
                 self.validation_class.validate_delete(self.user, **obj_data)
-                task_service = TaskService(self.user)
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                ownership = _explicit_task_ownership(self, obj, obj_data)
+                task_service = _checker_task_service(self, ownership)
                 task_data = {
                     'source': self._delete_source,
                     'business_data_serializer': self._get_business_data_serializer(),
@@ -414,7 +431,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
                     'executor_action_event': self._delete_executor_event,
                     'business_event': self._delete_business_event,
                     'data': self._adjust_delete_task_data(None, copy.deepcopy(obj_data)),
-                    **_explicit_task_ownership(self, obj, obj_data),
+                    **ownership,
                 }
                 return task_service.create(task_data)
         except Exception as exc:

@@ -28,7 +28,22 @@ from tasks_management.gql_mutations import ResolveTaskMutation, UpdateTaskMutati
 from tasks_management.gql_queries import TaskGQLType, TaskHistoryGQLType
 from tasks_management.models import Task, TaskExecutor, TaskGroup
 from tasks_management.schema import Query as TasksQuery
-from tasks_management.services import TaskService
+from tasks_management.services import BaseService, CheckerLogicServiceMixin, TaskService
+
+
+class _CheckerValidation:
+    validate_create = staticmethod(lambda user, **data: None)
+    validate_update = staticmethod(lambda user, **data: None)
+    validate_delete = staticmethod(lambda user, **data: None)
+
+
+class _SharedCheckerService(BaseService, CheckerLogicServiceMixin):
+    OBJECT_TYPE = BenefitPlan
+    _task_is_shared = True
+
+
+class _UnownedCheckerService(BaseService, CheckerLogicServiceMixin):
+    OBJECT_TYPE = BenefitPlan
 
 
 class Query(TasksQuery, graphene.ObjectType):
@@ -309,6 +324,49 @@ class TaskBenefitPlanAccessTest(TestCase):
                 "data": {},
             })
         self.assertFalse(denied["success"])
+
+    def test_checker_mixins_create_shared_tasks_only_for_explicit_hook(self):
+        service = _SharedCheckerService(
+            self.upg,
+            validation_class=_CheckerValidation,
+        )
+        operations = (
+            service.create_create_task({"code": "shared-create"}),
+            service.create_update_task({
+                "id": self.plan_upg.id,
+                "name": self.plan_upg.name,
+            }),
+            service.create_delete_task({"id": self.plan_rmep.id}),
+        )
+
+        for result in operations:
+            self.assertTrue(result["success"], result)
+            task = Task.objects.get(id=result["data"]["id"])
+            self.assertTrue(task.benefit_plan_is_shared)
+            self.assertIsNone(task.benefit_plan_id)
+
+    def test_checker_mixins_do_not_default_missing_ownership_to_shared(self):
+        result = _UnownedCheckerService(
+            self.upg,
+            validation_class=_CheckerValidation,
+        ).create_create_task({"code": "unowned-create"})
+
+        self.assertFalse(result["success"])
+        self.assertFalse(
+            Task.objects.filter(source="_UnownedCheckerService").exists()
+        )
+
+    def test_checker_mixin_keeps_feature_off_creation_behavior(self):
+        SocialProtectionConfig.enable_benefit_plan_access_control = False
+        result = _UnownedCheckerService(
+            self.upg,
+            validation_class=_CheckerValidation,
+        ).create_create_task({"code": "feature-off-create"})
+
+        self.assertTrue(result["success"], result)
+        task = Task.objects.get(id=result["data"]["id"])
+        self.assertIsNone(task.benefit_plan_id)
+        self.assertFalse(task.benefit_plan_is_shared)
 
     def test_update_cannot_change_or_remove_established_ownership(self):
         with self.permissions(self.upg):
